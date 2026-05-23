@@ -1,0 +1,10 @@
+{
+  "name": "conflux-workspace",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix app run tauri:dev",
+    "build": "npm --prefix app run tauri:build",
+    "frontend:dev": "npm --prefix app run dev",
+    "frontend:build": "npm --prefix app run build"
+  }
+}
