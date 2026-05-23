@@ -26,7 +26,8 @@ The initial app foundation is implemented:
   terminal pane, file search pane, and web pane.
 - xterm.js terminal rendering with resize handling.
 - Lightweight local file search that respects git ignore rules.
-- CI workflow for frontend build and Rust workspace tests.
+- CI workflow for frontend build, Rust formatting/lint/test gates, and macOS
+  Tauri build verification, with local `actionlint` validation documented.
 
 Verified locally:
 
@@ -41,7 +42,7 @@ npm --prefix app run tauri:dev
 Prerequisites:
 
 - Rust toolchain with Cargo
-- Node.js 20+
+- Node.js 22
 - npm 10+
 
 Install Rust with rustup if needed:
@@ -74,6 +75,19 @@ Run Rust tests:
 ```sh
 cargo test --workspace
 ```
+
+Run the full local verification gate:
+
+```sh
+npm --prefix app run build
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+actionlint .github/workflows/ci.yml
+```
+
+See [Development Pipeline](docs/development-pipeline.md) for first-run setup,
+startup checks, CI behavior, and release-build verification.
 
 ## Source Layout
 
