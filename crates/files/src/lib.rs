@@ -1,9 +1,12 @@
 use anyhow::Result;
-use conflux_core::{FileEntry, FileSearchQuery};
+use conflux_core::{
+    FileEntry, FileReadRequest, FileSearchQuery, FileTextDocument, FileWriteRequest,
+};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use ignore::WalkBuilder;
 use std::fs;
+use std::path::{Path, PathBuf};
 
 pub fn search_files(query: FileSearchQuery) -> Result<Vec<FileEntry>> {
     let matcher = SkimMatcherV2::default();
@@ -71,6 +74,93 @@ pub fn search_files(query: FileSearchQuery) -> Result<Vec<FileEntry>> {
     Ok(entries)
 }
 
+pub fn read_text_file(request: FileReadRequest) -> Result<FileTextDocument> {
+    let path = resolve_project_path(&request.root, &request.path, false)?;
+    let contents = fs::read_to_string(&path)?;
+    let modified_at = fs::metadata(&path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .map(chrono::DateTime::from);
+
+    Ok(FileTextDocument {
+        path,
+        contents,
+        modified_at,
+    })
+}
+
+pub fn write_text_file(request: FileWriteRequest) -> Result<FileTextDocument> {
+    let path = resolve_project_path(&request.root, &request.path, true)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, request.contents)?;
+
+    read_text_file(FileReadRequest {
+        root: request.root,
+        path,
+    })
+}
+
+fn resolve_project_path(root: &Path, path: &Path, allow_missing_leaf: bool) -> Result<PathBuf> {
+    let root = root.canonicalize()?;
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+
+    let resolved = if allow_missing_leaf {
+        let parent = candidate
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("file path has no parent"))?;
+        let parent = if parent.exists() {
+            parent.canonicalize()?
+        } else {
+            resolve_missing_parent(&root, parent)?
+        };
+        parent.join(
+            candidate
+                .file_name()
+                .ok_or_else(|| anyhow::anyhow!("file path has no name"))?,
+        )
+    } else {
+        candidate.canonicalize()?
+    };
+
+    if !resolved.starts_with(&root) {
+        anyhow::bail!("file path is outside project root");
+    }
+
+    Ok(resolved)
+}
+
+fn resolve_missing_parent(root: &Path, parent: &Path) -> Result<PathBuf> {
+    let mut existing = parent;
+    let mut missing = Vec::new();
+
+    while !existing.exists() {
+        let Some(name) = existing.file_name() else {
+            anyhow::bail!("file path is outside project root");
+        };
+        missing.push(name.to_owned());
+        existing = existing
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("file path is outside project root"))?;
+    }
+
+    let mut resolved = existing.canonicalize()?;
+    for name in missing.iter().rev() {
+        resolved.push(name);
+    }
+
+    if !resolved.starts_with(root) {
+        anyhow::bail!("file path is outside project root");
+    }
+
+    Ok(resolved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +182,64 @@ mod tests {
         .unwrap();
 
         assert_eq!(results[0].name, "TerminalPane.tsx");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reads_text_files_under_root() {
+        let root = std::env::temp_dir().join(format!("conflux-read-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        create_dir_all(root.join("notes")).unwrap();
+        write(root.join("notes").join("task.md"), "hello").unwrap();
+
+        let document = read_text_file(FileReadRequest {
+            root: root.clone(),
+            path: root.join("notes").join("task.md"),
+        })
+        .unwrap();
+
+        assert_eq!(document.contents, "hello");
+        assert_eq!(
+            document.path,
+            root.join("notes").join("task.md").canonicalize().unwrap()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn writes_text_files_under_root_and_creates_parent_dirs() {
+        let root = std::env::temp_dir().join(format!("conflux-write-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        create_dir_all(&root).unwrap();
+
+        let path = root.join(".conflux").join("notes").join("task.md");
+        let document = write_text_file(FileWriteRequest {
+            root: root.clone(),
+            path: path.clone(),
+            contents: "# Task\n".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(document.contents, "# Task\n");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "# Task\n");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_paths_outside_root() {
+        let root = std::env::temp_dir().join(format!("conflux-safe-root-{}", std::process::id()));
+        let outside = std::env::temp_dir().join(format!("conflux-outside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        create_dir_all(&root).unwrap();
+
+        let err = write_text_file(FileWriteRequest {
+            root: root.clone(),
+            path: outside,
+            contents: "nope".to_string(),
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("outside project root"));
         let _ = std::fs::remove_dir_all(root);
     }
 }

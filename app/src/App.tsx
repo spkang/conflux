@@ -1,30 +1,49 @@
 import {
+  Edit3,
   Files,
   Globe2,
   LayoutGrid,
+  NotebookTabs,
   PanelLeft,
   Search,
   SquareTerminal,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { CommandPalette, type Command } from "./components/CommandPalette";
+import { EditorPane } from "./components/EditorPane";
 import { FilesPane } from "./components/FilesPane";
 import { PaneFrame } from "./components/PaneFrame";
 import { TerminalPane } from "./components/TerminalPane";
 import { WebPane } from "./components/WebPane";
 import { ipc } from "./lib/ipc";
-import type { PaneDescriptor, WorkspaceLayout } from "./lib/types";
+import type { PaneDescriptor, PaneTreeNode, SplitAxis, WorkspaceLayout } from "./lib/types";
 import { createPane, workspaceReducer } from "./state/workspace";
 
 export function App() {
   const [workspace, dispatch] = useReducer(workspaceReducer, null as WorkspaceLayout | null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [railCompact, setRailCompact] = useState(false);
+  const [draggedPaneId, setDraggedPaneId] = useState<string | null>(null);
   const root = useMemo(() => getWorkspaceRoot(workspace), [workspace]);
 
   useEffect(() => {
     void ipc.defaultLayout(null).then((layout) => dispatch({ type: "loaded", layout }));
   }, []);
+
+  useEffect(() => {
+    if (!workspace) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void ipc.saveLayout({
+        ...workspace,
+        updated_at: new Date().toISOString(),
+      });
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [workspace]);
 
   const addTerminal = useCallback((cwd = root) => {
     dispatch({
@@ -40,6 +59,35 @@ export function App() {
     });
   }, [root]);
 
+  const openFile = useCallback((path: string) => {
+    dispatch({
+      type: "addPane",
+      pane: createPane("editor", basename(path), { root, path }),
+    });
+  }, [root]);
+
+  const openTaskNotes = useCallback(() => {
+    if (!workspace) {
+      return;
+    }
+
+    dispatch({
+      type: "addPane",
+      pane: createPane("editor", "Task notes", {
+        root: workspace.project.root,
+        path: workspace.task.notes_path,
+      }),
+    });
+  }, [workspace]);
+
+  const openEditorPrompt = useCallback(() => {
+    const input = window.prompt("Open file path", root);
+    if (!input) {
+      return;
+    }
+    openFile(input);
+  }, [openFile, root]);
+
   const addWeb = useCallback(async () => {
     const input = window.prompt("Open URL", "https://docs.rs/");
     if (!input) {
@@ -53,10 +101,12 @@ export function App() {
     });
   }, []);
 
-  const duplicatePane = (pane: PaneDescriptor) => {
+  const splitPane = (pane: PaneDescriptor, axis: SplitAxis) => {
     dispatch({
-      type: "addPane",
+      type: "splitPane",
+      paneId: pane.id,
       pane: createPane(pane.kind, pane.title, pane.state),
+      axis,
     });
   };
 
@@ -81,14 +131,6 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [addTerminal, workspace]);
 
-  const visiblePanes = useMemo(() => {
-    if (!workspace?.maximized_pane_id) {
-      return workspace?.panes ?? [];
-    }
-
-    return workspace.panes.filter((pane) => pane.id === workspace.maximized_pane_id);
-  }, [workspace]);
-
   const commands: Command[] = useMemo(
     () => [
       {
@@ -109,11 +151,25 @@ export function App() {
         id: "new-files",
         label: "Open file search",
         detail: root,
-        icon: "search",
+        icon: "files",
         run: addFiles,
       },
+      {
+        id: "open-editor",
+        label: "Open editor",
+        detail: "Open a project file by path",
+        icon: "editor",
+        run: openEditorPrompt,
+      },
+      {
+        id: "task-notes",
+        label: "Open task notes",
+        detail: workspace?.task.notes_path ?? ".conflux/notes/default.md",
+        icon: "notes",
+        run: openTaskNotes,
+      },
     ],
-    [addFiles, addTerminal, addWeb, root],
+    [addFiles, addTerminal, addWeb, openEditorPrompt, openTaskNotes, root, workspace?.task.notes_path],
   );
 
   if (!workspace) {
@@ -148,6 +204,14 @@ export function App() {
             <Files size={18} />
             <span>Files</span>
           </button>
+          <button type="button" title="Open notes" onClick={openTaskNotes}>
+            <NotebookTabs size={18} />
+            <span>Notes</span>
+          </button>
+          <button type="button" title="Open editor" onClick={openEditorPrompt}>
+            <Edit3 size={18} />
+            <span>Editor</span>
+          </button>
           <button type="button" title="Command palette" onClick={() => setPaletteOpen(true)}>
             <Search size={18} />
             <span>Command</span>
@@ -162,8 +226,8 @@ export function App() {
       <section className="workspace">
         <header className="workspace-topbar">
           <div>
-            <span className="workspace-kicker">Workspace</span>
-            <h1>{workspace.name}</h1>
+            <span className="workspace-kicker">{workspace.project.name}</span>
+            <h1>{workspace.task.title}</h1>
           </div>
           <div className="workspace-actions">
             <button type="button" onClick={() => setPaletteOpen(true)}>
@@ -177,25 +241,33 @@ export function App() {
           </div>
         </header>
 
-        <div
-          className={`pane-grid pane-grid--${visiblePanes.length} ${
-            workspace.maximized_pane_id ? "is-maximized" : ""
-          }`}
-        >
-          {visiblePanes.map((pane) => (
-            <PaneFrame
-              key={pane.id}
-              pane={pane}
-              active={workspace.active_pane_id === pane.id}
-              maximized={workspace.maximized_pane_id === pane.id}
-              onActivate={() => dispatch({ type: "activate", paneId: pane.id })}
-              onClose={() => dispatch({ type: "closePane", paneId: pane.id })}
-              onMaximize={() => dispatch({ type: "toggleMaximize", paneId: pane.id })}
-              onSplit={() => duplicatePane(pane)}
-            >
-              <PaneContent pane={pane} onOpenTerminalHere={addTerminal} />
-            </PaneFrame>
-          ))}
+        <div className={`pane-workspace ${workspace.maximized_pane_id ? "is-maximized" : ""}`}>
+          <PaneTreeView
+            node={
+              workspace.maximized_pane_id
+                ? { kind: "leaf", pane_id: workspace.maximized_pane_id }
+                : workspace.pane_tree
+            }
+            panes={workspace.panes}
+            activePaneId={workspace.active_pane_id}
+            maximizedPaneId={workspace.maximized_pane_id}
+            draggedPaneId={draggedPaneId}
+            onActivate={(paneId) => dispatch({ type: "activate", paneId })}
+            onClose={(paneId) => dispatch({ type: "closePane", paneId })}
+            onMaximize={(paneId) => dispatch({ type: "toggleMaximize", paneId })}
+            onSplit={splitPane}
+            onDragPane={setDraggedPaneId}
+            onDropPane={(targetPaneId) => {
+              if (draggedPaneId && draggedPaneId !== targetPaneId) {
+                dispatch({ type: "swapPanes", sourcePaneId: draggedPaneId, targetPaneId });
+              }
+              setDraggedPaneId(null);
+            }}
+            onResizeSplit={(splitId, ratio) => dispatch({ type: "resizeSplit", splitId, ratio })}
+            onOpenTerminalHere={addTerminal}
+            onOpenFile={openFile}
+            onRenamePane={(paneId, title) => dispatch({ type: "renamePane", paneId, title })}
+          />
         </div>
       </section>
 
@@ -208,29 +280,149 @@ export function App() {
   );
 }
 
+type PaneTreeViewProps = {
+  node: PaneTreeNode;
+  panes: PaneDescriptor[];
+  activePaneId: string | null;
+  maximizedPaneId: string | null;
+  draggedPaneId: string | null;
+  onActivate: (paneId: string) => void;
+  onClose: (paneId: string) => void;
+  onMaximize: (paneId: string) => void;
+  onSplit: (pane: PaneDescriptor, axis: SplitAxis) => void;
+  onDragPane: (paneId: string) => void;
+  onDropPane: (paneId: string) => void;
+  onResizeSplit: (splitId: string, ratio: number) => void;
+  onOpenTerminalHere: (path: string) => void;
+  onOpenFile: (path: string) => void;
+  onRenamePane: (paneId: string, title: string) => void;
+};
+
+function PaneTreeView(props: PaneTreeViewProps) {
+  const { node, panes } = props;
+
+  if (node.kind === "leaf") {
+    const pane = panes.find((candidate) => candidate.id === node.pane_id);
+    if (!pane) {
+      return <div className="empty-state">Missing pane</div>;
+    }
+
+    return (
+      <PaneFrame
+        pane={pane}
+        active={props.activePaneId === pane.id}
+        maximized={props.maximizedPaneId === pane.id}
+        onActivate={() => props.onActivate(pane.id)}
+        onClose={() => props.onClose(pane.id)}
+        onMaximize={() => props.onMaximize(pane.id)}
+        onSplit={(axis) => props.onSplit(pane, axis)}
+        onDragPane={props.onDragPane}
+        onDropPane={props.onDropPane}
+      >
+        <PaneContent
+          pane={pane}
+          onOpenTerminalHere={props.onOpenTerminalHere}
+          onOpenFile={props.onOpenFile}
+          onRename={(title) => props.onRenamePane(pane.id, title)}
+        />
+      </PaneFrame>
+    );
+  }
+
+  const firstSize = `${node.ratio * 100}%`;
+  const secondSize = `${(1 - node.ratio) * 100}%`;
+  const style =
+    node.axis === "horizontal"
+      ? { gridTemplateColumns: `${firstSize} 6px ${secondSize}` }
+      : { gridTemplateRows: `${firstSize} 6px ${secondSize}` };
+
+  return (
+    <div className={`pane-split pane-split--${node.axis}`} style={style}>
+      <PaneTreeView {...props} node={node.first} />
+      <SplitHandle node={node} onResize={props.onResizeSplit} />
+      <PaneTreeView {...props} node={node.second} />
+    </div>
+  );
+}
+
+function SplitHandle({
+  node,
+  onResize,
+}: {
+  node: Extract<PaneTreeNode, { kind: "split" }>;
+  onResize: (splitId: string, ratio: number) => void;
+}) {
+  return (
+    <div
+      className="pane-split__handle"
+      role="separator"
+      onPointerDown={(event) => {
+        const container = event.currentTarget.parentElement;
+        if (!container) {
+          return;
+        }
+        const rect = container.getBoundingClientRect();
+        const pointerId = event.pointerId;
+        event.currentTarget.setPointerCapture(pointerId);
+
+        const onPointerMove = (moveEvent: PointerEvent) => {
+          const ratio =
+            node.axis === "horizontal"
+              ? (moveEvent.clientX - rect.left) / rect.width
+              : (moveEvent.clientY - rect.top) / rect.height;
+          onResize(node.id, ratio);
+        };
+        const onPointerUp = () => {
+          window.removeEventListener("pointermove", onPointerMove);
+          window.removeEventListener("pointerup", onPointerUp);
+        };
+
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", onPointerUp);
+      }}
+    />
+  );
+}
+
 function PaneContent({
   pane,
   onOpenTerminalHere,
+  onOpenFile,
+  onRename,
 }: {
   pane: PaneDescriptor;
   onOpenTerminalHere: (path: string) => void;
+  onOpenFile: (path: string) => void;
+  onRename: (title: string) => void;
 }) {
   if (pane.kind === "terminal") {
     return <TerminalPane pane={pane} />;
   }
   if (pane.kind === "files") {
-    return <FilesPane pane={pane} onOpenTerminalHere={onOpenTerminalHere} />;
+    return <FilesPane pane={pane} onOpenTerminalHere={onOpenTerminalHere} onOpenFile={onOpenFile} />;
   }
   if (pane.kind === "web") {
     return <WebPane pane={pane} />;
+  }
+  if (pane.kind === "editor") {
+    return <EditorPane pane={pane} onRename={onRename} />;
   }
 
   return <div className="empty-state">Preview pane</div>;
 }
 
+function basename(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? "Editor";
+}
+
 function getWorkspaceRoot(workspace: WorkspaceLayout | null): string {
   if (!workspace) {
     return "";
+  }
+
+  if (workspace.project.root) {
+    return workspace.project.root;
   }
 
   for (const pane of workspace.panes) {

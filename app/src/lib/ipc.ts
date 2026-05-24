@@ -2,13 +2,17 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   FileEntry,
+  FileReadRequest,
   FileSearchQuery,
+  FileTextDocument,
+  FileWriteRequest,
   TerminalExitEvent,
   TerminalOutputEvent,
   TerminalSession,
   TerminalSpawnRequest,
   WebPanelConfig,
   WorkspaceLayout,
+  WorkspaceSaveRequest,
 } from "./types";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
@@ -33,6 +37,10 @@ export const ipc = {
   defaultLayout(root?: string | null) {
     return invoke<WorkspaceLayout>("workspace_default_layout", { root: root ?? null });
   },
+  saveLayout(layout: WorkspaceLayout) {
+    const request: WorkspaceSaveRequest = { layout };
+    return invoke<WorkspaceLayout>("workspace_save_layout", { request });
+  },
   spawnTerminal(request: TerminalSpawnRequest) {
     return invoke<TerminalSession>("terminal_spawn", { request });
   },
@@ -52,6 +60,12 @@ export const ipc = {
   searchFiles(query: FileSearchQuery) {
     return invoke<FileEntry[]>("files_search", { query });
   },
+  readTextFile(request: FileReadRequest) {
+    return invoke<FileTextDocument>("files_read_text", { request });
+  },
+  writeTextFile(request: FileWriteRequest) {
+    return invoke<FileTextDocument>("files_write_text", { request });
+  },
   normalizeUrl(input: string) {
     return invoke<WebPanelConfig>("webpanel_normalize_url", { input });
   },
@@ -63,18 +77,48 @@ export const ipc = {
   },
 };
 
+let mockWorkspace: WorkspaceLayout | null = null;
+
 async function mockInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (command === "workspace_default_layout") {
+    if (mockWorkspace) {
+      return mockWorkspace as T;
+    }
+
     const layout: WorkspaceLayout = {
       id: "mock-workspace",
-      name: "Default",
+      name: "Default task",
+      project: {
+        id: "mock-project",
+        name: "conflux",
+        root: "/Users/spkang/dev/agents/conflux",
+        active_task_id: "mock-task",
+        updated_at: new Date().toISOString(),
+      },
+      task: {
+        id: "mock-task",
+        project_id: "mock-project",
+        title: "Default task",
+        notes_path: "/Users/spkang/dev/agents/conflux/.conflux/notes/default.md",
+        updated_at: new Date().toISOString(),
+      },
       panes: [
         {
           id: "terminal-1",
           kind: "terminal",
-          title: "Terminal",
+          title: "AI Terminal",
           state: { cwd: "/Users/spkang/dev/agents/conflux" },
           capabilities: ["split", "resize", "maximize", "close"],
+        },
+        {
+          id: "notes-1",
+          kind: "editor",
+          title: "Task notes",
+          state: {
+            root: "/Users/spkang/dev/agents/conflux",
+            path: "/Users/spkang/dev/agents/conflux/.conflux/notes/default.md",
+          },
+          capabilities: ["split", "resize", "maximize", "close", "save"],
         },
         {
           id: "files-1",
@@ -84,11 +128,33 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
           capabilities: ["split", "resize", "maximize", "close", "search"],
         },
       ],
+      pane_tree: {
+        kind: "split",
+        id: "mock-split-root",
+        axis: "horizontal",
+        ratio: 0.68,
+        first: {
+          kind: "split",
+          id: "mock-split-left",
+          axis: "vertical",
+          ratio: 0.56,
+          first: { kind: "leaf", pane_id: "terminal-1" },
+          second: { kind: "leaf", pane_id: "notes-1" },
+        },
+        second: { kind: "leaf", pane_id: "files-1" },
+      },
       active_pane_id: "terminal-1",
       maximized_pane_id: null,
       updated_at: new Date().toISOString(),
     };
+    mockWorkspace = layout;
     return layout as T;
+  }
+
+  if (command === "workspace_save_layout") {
+    const request = (args?.request ?? {}) as WorkspaceSaveRequest;
+    mockWorkspace = request.layout;
+    return request.layout as T;
   }
 
   if (command === "terminal_spawn") {
@@ -122,6 +188,27 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
       },
     ];
     return entries as T;
+  }
+
+  if (command === "files_read_text") {
+    const request = (args?.request ?? {}) as FileReadRequest;
+    const contents = request.path.endsWith(".md")
+      ? "# Default task\n\n- Capture useful context here.\n"
+      : "";
+    return {
+      path: request.path,
+      contents,
+      modified_at: new Date().toISOString(),
+    } as T;
+  }
+
+  if (command === "files_write_text") {
+    const request = (args?.request ?? {}) as FileWriteRequest;
+    return {
+      path: request.path,
+      contents: request.contents,
+      modified_at: new Date().toISOString(),
+    } as T;
   }
 
   if (command === "webpanel_normalize_url") {

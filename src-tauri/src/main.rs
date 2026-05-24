@@ -1,9 +1,11 @@
 use conflux_core::{
-    FileEntry, FileSearchQuery, TerminalResizeRequest, TerminalSession, TerminalSpawnRequest,
-    TerminalWriteRequest, WebPanelConfig, WorkspaceLayout,
+    FileEntry, FileReadRequest, FileSearchQuery, FileTextDocument, FileWriteRequest,
+    TerminalResizeRequest, TerminalSession, TerminalSpawnRequest, TerminalWriteRequest,
+    WebPanelConfig, WorkspaceLayout, WorkspaceSaveRequest,
 };
 use conflux_terminal::TerminalManager;
 use serde::Serialize;
+use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
@@ -43,7 +45,33 @@ impl From<conflux_webpanel::WebPanelError> for CommandError {
 #[tauri::command]
 fn workspace_default_layout(root: Option<PathBuf>) -> WorkspaceLayout {
     let root = root.or_else(|| std::env::current_dir().ok());
+    if let Some(root) = root.as_ref() {
+        if let Ok(contents) = fs::read_to_string(workspace_layout_path(root)) {
+            if let Ok(layout) = serde_json::from_str::<WorkspaceLayout>(&contents) {
+                return layout;
+            }
+        }
+    }
+
     WorkspaceLayout::starter(root)
+}
+
+#[tauri::command]
+fn workspace_save_layout(request: WorkspaceSaveRequest) -> Result<WorkspaceLayout, CommandError> {
+    let path = workspace_layout_path(&request.layout.project.root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| CommandError::Message(err.to_string()))?;
+    }
+    let contents = serde_json::to_string_pretty(&request.layout)
+        .map_err(|err| CommandError::Message(err.to_string()))?;
+    fs::write(path, contents).map_err(|err| CommandError::Message(err.to_string()))?;
+    Ok(request.layout)
+}
+
+fn workspace_layout_path(root: &std::path::Path) -> PathBuf {
+    root.join(".conflux")
+        .join("tasks")
+        .join("default-layout.json")
 }
 
 #[tauri::command]
@@ -96,6 +124,16 @@ fn files_search(query: FileSearchQuery) -> Result<Vec<FileEntry>, CommandError> 
 }
 
 #[tauri::command]
+fn files_read_text(request: FileReadRequest) -> Result<FileTextDocument, CommandError> {
+    conflux_files::read_text_file(request).map_err(Into::into)
+}
+
+#[tauri::command]
+fn files_write_text(request: FileWriteRequest) -> Result<FileTextDocument, CommandError> {
+    conflux_files::write_text_file(request).map_err(Into::into)
+}
+
+#[tauri::command]
 fn webpanel_normalize_url(input: String) -> Result<WebPanelConfig, CommandError> {
     conflux_webpanel::normalize_url(&input).map_err(Into::into)
 }
@@ -115,7 +153,10 @@ fn main() {
             terminal_resize,
             terminal_kill,
             files_search,
-            webpanel_normalize_url
+            files_read_text,
+            files_write_text,
+            webpanel_normalize_url,
+            workspace_save_layout
         ])
         .run(tauri::generate_context!())
         .expect("error while running Conflux");

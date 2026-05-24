@@ -6,9 +6,10 @@ import type { FileEntry, PaneDescriptor } from "../lib/types";
 type FilesPaneProps = {
   pane: PaneDescriptor;
   onOpenTerminalHere: (path: string) => void;
+  onOpenFile: (path: string) => void;
 };
 
-export function FilesPane({ pane, onOpenTerminalHere }: FilesPaneProps) {
+export function FilesPane({ pane, onOpenTerminalHere, onOpenFile }: FilesPaneProps) {
   const root = useMemo(() => String(pane.state.root ?? pane.state.cwd ?? ""), [pane.state]);
   const [query, setQuery] = useState("");
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -74,7 +75,13 @@ export function FilesPane({ pane, onOpenTerminalHere }: FilesPaneProps) {
             className="file-row"
             key={entry.path}
             title={entry.path}
-            onDoubleClick={() => onOpenTerminalHere(entry.is_dir ? entry.path : root)}
+            onDoubleClick={() => {
+              if (entry.is_dir) {
+                onOpenTerminalHere(entry.path);
+              } else {
+                onOpenFile(entry.path);
+              }
+            }}
           >
             {entry.is_dir ? <Folder size={16} /> : <File size={16} />}
             <span className="file-row__name">{entry.name}</span>

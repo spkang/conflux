@@ -1,4 +1,4 @@
-export type PaneKind = "terminal" | "web" | "files" | "preview";
+export type PaneKind = "terminal" | "web" | "files" | "editor" | "markdown_preview" | "preview";
 
 export type PaneCapability =
   | "split"
@@ -6,7 +6,10 @@ export type PaneCapability =
   | "maximize"
   | "close"
   | "reload"
-  | "search";
+  | "search"
+  | "save"
+  | "back"
+  | "forward";
 
 export type PaneDescriptor = {
   id: string;
@@ -19,11 +22,47 @@ export type PaneDescriptor = {
 export type WorkspaceLayout = {
   id: string;
   name: string;
+  project: ProjectDescriptor;
+  task: TaskDescriptor;
   panes: PaneDescriptor[];
+  pane_tree: PaneTreeNode;
   active_pane_id: string | null;
   maximized_pane_id: string | null;
   updated_at: string;
 };
+
+export type WorkspaceSaveRequest = {
+  layout: WorkspaceLayout;
+};
+
+export type ProjectDescriptor = {
+  id: string;
+  name: string;
+  root: string;
+  active_task_id: string | null;
+  updated_at: string;
+};
+
+export type TaskDescriptor = {
+  id: string;
+  project_id: string;
+  title: string;
+  notes_path: string;
+  updated_at: string;
+};
+
+export type SplitAxis = "horizontal" | "vertical";
+
+export type PaneTreeNode =
+  | { kind: "leaf"; pane_id: string }
+  | {
+      kind: "split";
+      id: string;
+      axis: SplitAxis;
+      ratio: number;
+      first: PaneTreeNode;
+      second: PaneTreeNode;
+    };
 
 export type TerminalSpawnRequest = {
   cwd?: string | null;
@@ -66,8 +105,24 @@ export type FileEntry = {
   score: number;
 };
 
+export type FileReadRequest = {
+  root: string;
+  path: string;
+};
+
+export type FileWriteRequest = {
+  root: string;
+  path: string;
+  contents: string;
+};
+
+export type FileTextDocument = {
+  path: string;
+  contents: string;
+  modified_at?: string | null;
+};
+
 export type WebPanelConfig = {
   url: string;
   title: string;
 };
-

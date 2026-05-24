@@ -1,11 +1,11 @@
-import { Globe2, Search, SquareTerminal } from "lucide-react";
+import { Edit3, Files, Globe2, NotebookTabs, Search, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 export type Command = {
   id: string;
   label: string;
   detail: string;
-  icon: "terminal" | "web" | "search";
+  icon: "terminal" | "web" | "search" | "files" | "editor" | "notes";
   run: () => void | Promise<void>;
 };
 
@@ -19,6 +19,9 @@ const icons = {
   terminal: SquareTerminal,
   web: Globe2,
   search: Search,
+  files: Files,
+  editor: Edit3,
+  notes: NotebookTabs,
 };
 
 export function CommandPalette({ open, commands, onClose }: CommandPaletteProps) {
